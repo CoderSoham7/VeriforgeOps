@@ -12,6 +12,14 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List
 import os
 
+# Live Pub/Sub integration (optional — UI still works in mock mode if GCP is unreachable)
+try:
+    from src import pubsub_live
+    _LIVE_AVAILABLE = True
+except Exception:
+    pubsub_live = None
+    _LIVE_AVAILABLE = False
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="VeriForge Ops · Vertex AI Telemetry & FinOps",
@@ -224,6 +232,10 @@ if "published_events" not in st.session_state:
     st.session_state.published_events = []
 if "msg_counter" not in st.session_state:
     st.session_state.msg_counter = 0
+if "live_mode" not in st.session_state:
+    st.session_state.live_mode = False
+if "status_banner" not in st.session_state:
+    st.session_state.status_banner = None  # (kind, text)
 
 
 # ── Provider metadata & generators ────────────────────────────────────────────
@@ -382,6 +394,27 @@ with st.sidebar:
     """)
     st.divider()
 
+    # ── Mode toggle: Mock (session only) vs Live (real GCP Pub/Sub) ───────────
+    live_default = st.session_state.live_mode
+    st.session_state.live_mode = st.toggle(
+        "🛰 Live GCP Pub/Sub",
+        value=live_default,
+        help="OFF = local mock (session only). ON = publish to / pull from the real "
+             "Pub/Sub topic. Requires GCP credentials.",
+        disabled=not _LIVE_AVAILABLE,
+    )
+    LIVE = st.session_state.live_mode and _LIVE_AVAILABLE
+
+    # Surface credential status when live mode is requested.
+    if LIVE:
+        ok_creds, creds_msg = pubsub_live.connection_status()
+        if ok_creds:
+            st.caption(f"✅ Credentials: {creds_msg}")
+        else:
+            st.caption(f"⚠️ {creds_msg}")
+    elif st.session_state.live_mode and not _LIVE_AVAILABLE:
+        st.caption("⚠️ Live module unavailable — using mock mode.")
+
     st.markdown("##### 📡 Publish Telemetry")
     publish_provider = st.selectbox("Cloud Provider", ["Random"] + list(PROVIDER_META.keys()))
     publish_count = st.slider("Batch Size", 1, 30, 10)
@@ -395,13 +428,32 @@ with st.sidebar:
     if do_clear:
         st.session_state.published_events = []
         st.session_state.msg_counter = 0
+        st.session_state.status_banner = None
         st.rerun()
 
     if do_publish:
         prov = None if publish_provider == "Random" else publish_provider
         new = [generate_mock_event(prov) for _ in range(publish_count)]
-        st.session_state.published_events = new + st.session_state.published_events
+        if LIVE:
+            ok, msg, ids = pubsub_live.publish_events([e["data"] for e in new])
+            st.session_state.status_banner = ("success" if ok else "error", msg)
+            if ok:
+                # Reflect the real Pub/Sub message IDs in the local view.
+                for e, mid in zip(new, ids):
+                    e["message_id"] = mid
+                st.session_state.published_events = new + st.session_state.published_events
+        else:
+            st.session_state.published_events = new + st.session_state.published_events
         st.rerun()
+
+    # Live pull control (only meaningful in live mode).
+    if LIVE:
+        if st.button("⬇ Pull Live Events", use_container_width=True):
+            ok, msg, recs = pubsub_live.pull_events(max_messages=50)
+            st.session_state.status_banner = ("success" if ok else "error", msg)
+            if ok and recs:
+                st.session_state.published_events = recs + st.session_state.published_events
+            st.rerun()
 
     if st.button("📂 Load Sample JSONL", use_container_width=True):
         p = os.path.join(os.path.dirname(__file__), "mock_telemetry_pubsub.jsonl")
@@ -421,10 +473,14 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
+    if LIVE:
+        mode_badge = f'<span style="color:{C["green"]}; font-weight:700;">● LIVE — GCP PUB/SUB</span>'
+    else:
+        mode_badge = '<span class="vf-active" style="margin:0;">● MOCK MODE</span>'
     html(f"""
     <div style="font-size:0.7rem; color:{C['gray400']}; line-height:1.7;">
         <div style="font-size:0.62rem; text-transform:uppercase; letter-spacing:1px; color:{C['gray500']}; margin-bottom:6px;">Pub/Sub Connection</div>
-        <div><span class="vf-active" style="margin:0;">● MOCK MODE</span></div>
+        <div>{mode_badge}</div>
         <div style="margin-top:8px;">📦 Topic: <span class="mono" style="color:{C['brand500']};">veriforgeops-telemetry-ingest</span></div>
         <div style="margin-top:4px;">🗂 Project: <span class="mono" style="color:{C['brand500']};">cog01k24f1...</span></div>
     </div>
@@ -526,6 +582,11 @@ kpi(k4, "⏱️", "rgba(251,188,5,0.1)", C["yellow"], "rgba(251,188,5,0.15)",
     "Average", "rgba(251,188,5,0.1)", C["yellow"],
     f"{avg_latency:,.0f} <span style='font-size:0.9rem; font-weight:400; color:{C['gray400']};'>ms</span>", "#fff",
     "Mean API Latency", "✅", C["yellow"], "Flash models lead efficiency")
+
+# Surface live publish/pull status from the most recent sidebar action.
+if st.session_state.status_banner:
+    _kind, _text = st.session_state.status_banner
+    (st.success if _kind == "success" else st.error)(_text)
 
 st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 
@@ -845,7 +906,7 @@ with tab_stream:
         html(f"""<div class="glass-card" style="text-align:center; padding:48px 24px;">
             <div style="font-size:2.6rem; margin-bottom:10px;">📭</div>
             <div style="font-size:1rem; color:#fff; font-weight:600;">No events published yet</div>
-            <div style="font-size:0.8rem; color:{C['gray400']}; margin-top:6px;">Use the sidebar to <strong>Publish</strong> mock telemetry or <strong>Load Sample JSONL</strong>.</div>
+            <div style="font-size:0.8rem; color:{C['gray400']}; margin-top:6px;">Use the sidebar to <strong>Publish</strong> telemetry, <strong>Pull Live Events</strong> (live mode), or <strong>Load Sample JSONL</strong>.</div>
         </div>""")
     else:
         fc1, fc2 = st.columns(2)
