@@ -941,7 +941,19 @@ with tab_stream:
         if fassoc:
             filtered = [e for e in filtered if e["data"]["associate_id"] in fassoc]
 
-        html(f"""<div style="font-size:0.72rem; color:{C['gray500']}; margin:6px 0 12px;">Showing {min(len(filtered),60)} of {len(filtered)} matching events ({len(events)} total)</div>""")
+        # Delivery-path breakdown: Log Router vs Direct-to-Topic.
+        routed_n = sum(1 for e in events if e["data"].get("_routed_via_log_router"))
+        direct_n = len(events) - routed_n
+        html(f"""<div style="display:flex; gap:10px; flex-wrap:wrap; margin:6px 0 12px;">
+            <span style="font-size:0.68rem; font-weight:700; padding:3px 11px; border-radius:20px;
+                background:rgba(52,168,83,0.12); color:{C['green']}; border:1px solid rgba(52,168,83,0.4);">
+                🛰 Via Log Router: {routed_n}</span>
+            <span style="font-size:0.68rem; font-weight:700; padding:3px 11px; border-radius:20px;
+                background:rgba(99,102,241,0.12); color:{C['indigo300']}; border:1px solid rgba(99,102,241,0.4);">
+                ⚡ Direct to Topic: {direct_n}</span>
+            <span style="font-size:0.72rem; color:{C['gray500']}; margin-left:auto; align-self:center;">
+                Showing {min(len(filtered),60)} of {len(filtered)} matching ({len(events)} total)</span>
+        </div>""")
 
         for ev in filtered[:60]:
             d = ev["data"]
@@ -953,9 +965,18 @@ with tab_stream:
             chars = f"{ru.get('input_characters', 0):,} chars" if "input_characters" in ru else ""
             usage = " · ".join(filter(None, [tok, aud, chars])) or "—"
             cached_html = f'<span style="color:{C["green"]};">💾 {ru.get("cached_tokens", 0):,} cached</span>' if ru.get("cached_tokens") else ""
+            if d.get("_routed_via_log_router"):
+                path_badge = (f'<span style="background:rgba(52,168,83,0.14); color:{C["green"]}; '
+                              f'border:1px solid rgba(52,168,83,0.45); font-size:0.55rem; font-weight:700; '
+                              f'padding:2px 7px; border-radius:20px;">🛰 LOG ROUTER</span>')
+            else:
+                path_badge = (f'<span style="background:rgba(99,102,241,0.14); color:{C["indigo300"]}; '
+                              f'border:1px solid rgba(99,102,241,0.45); font-size:0.55rem; font-weight:700; '
+                              f'padding:2px 7px; border-radius:20px;">⚡ DIRECT</span>')
             html(f"""<div class="glass-card" style="padding:12px 16px; margin-bottom:8px; border-left:3px solid {cc};">
                 <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                     <span style="background:{cc}22; color:{cc}; border:1px solid {cc}55; font-size:0.6rem; font-weight:700; padding:2px 9px; border-radius:20px; text-transform:uppercase;">{cloud}</span>
+                    {path_badge}
                     <span style="color:#fff; font-weight:600; font-size:0.8rem;">{d['service']}</span>
                     <span style="color:{C['gray500']};">·</span>
                     <span style="color:{C['gray400']}; font-size:0.78rem;">{d['operation']}</span>
