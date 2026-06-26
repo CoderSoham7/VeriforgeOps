@@ -23,6 +23,8 @@ PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "cog01k24f1ea555zdv7ynzthxan
 TOPIC_ID = os.environ.get("VERIFORGE_PUBSUB_TOPIC", "veriforgeops-telemetry-ingest")
 # Persistent subscription so messages published between pulls are retained.
 SUBSCRIPTION_ID = os.environ.get("VERIFORGE_PUBSUB_SUB", "veriforgeops-streamlit-live")
+# Cloud Logging log name used when routing events through the Log Router sink.
+LOG_NAME = os.environ.get("VERIFORGE_LOG_NAME", "veriforgeops-telemetry")
 
 
 # ── Credential helpers ────────────────────────────────────────────────────────
@@ -90,6 +92,70 @@ def _subscriber():
 
     creds = _credentials()
     return pubsub_v1.SubscriberClient(credentials=creds) if creds else pubsub_v1.SubscriberClient()
+
+
+def _logging_client(project_id: str):
+    from google.cloud import logging_v2
+
+    creds = _credentials()
+    if creds:
+        return logging_v2.Client(project=project_id, credentials=creds)
+    return logging_v2.Client(project=project_id)
+
+
+# ── Route via Log Router (Cloud Logging -> sink -> topic) ───────────────────────
+def log_events(event_payloads: List[Dict[str, Any]]) -> Tuple[bool, str, int]:
+    """
+    Write canonical event payloads to Cloud Logging as structured entries that
+    match the 'vertex-ai-telemetry-sink' filter (resource.type='audited_resource',
+    service='aiplatform.googleapis.com'). The Log Router then forwards them to the
+    Pub/Sub topic — which is what increments the sink's exported-volume metric.
+
+    Unlike publish_events (which writes straight to the topic and bypasses the
+    sink), this path flows through Cloud Logging. Routed messages arrive on the
+    topic wrapped as LogEntry JSON, with the canonical event under `jsonPayload`.
+    Returns (ok, message, count_written).
+    """
+    if not event_payloads:
+        return False, "No events to route.", 0
+
+    # Best-effort schema validation (skip invalid, keep valid).
+    try:
+        from src.schemas import CanonicalUsageEvent
+
+        validated = []
+        for p in event_payloads:
+            try:
+                validated.append(CanonicalUsageEvent(**p).model_dump())
+            except Exception:
+                pass
+        if not validated:
+            return False, "All events failed schema validation.", 0
+    except Exception:
+        validated = event_payloads
+
+    project_id = _project_id()
+    try:
+        client = _logging_client(project_id)
+        logger = client.logger(LOG_NAME)
+        for payload in validated:
+            resource = {
+                "type": "audited_resource",
+                "labels": {
+                    "service": "aiplatform.googleapis.com",
+                    "method": str(payload.get("operation", "predict")),
+                    "project_id": project_id,
+                },
+            }
+            logger.log_struct(payload, resource=resource, severity="INFO")
+        return (
+            True,
+            f"Routed {len(validated)} event(s) via Cloud Logging → "
+            f"Log Router sink → {TOPIC_ID}. (Sink volume will update shortly.)",
+            len(validated),
+        )
+    except Exception as e:
+        return False, f"Log Router routing failed: {e}", 0
 
 
 # ── Publish ─────────────────────────────────────────────────────────────────────
@@ -181,6 +247,12 @@ def pull_events(max_messages: int = 50) -> Tuple[bool, str, List[Dict[str, Any]]
             payload = json.loads(msg.message.data.decode("utf-8"))
         except Exception:
             payload = {"_raw": msg.message.data.decode("utf-8", errors="replace")}
+        # Messages routed via the Log Router arrive wrapped as a LogEntry; the
+        # canonical event sits under jsonPayload. Unwrap so the UI sees the event.
+        if isinstance(payload, dict) and "jsonPayload" in payload:
+            inner = payload.get("jsonPayload") or {}
+            inner["_routed_via_log_router"] = True
+            payload = inner
         records.append({"message_id": msg.message.message_id, "data": payload})
 
     try:

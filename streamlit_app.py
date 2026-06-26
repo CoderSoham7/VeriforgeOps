@@ -419,6 +419,18 @@ with st.sidebar:
     publish_provider = st.selectbox("Cloud Provider", ["Random"] + list(PROVIDER_META.keys()))
     publish_count = st.slider("Batch Size", 1, 30, 10)
 
+    # Delivery method (only relevant in live mode).
+    delivery = "Direct to Topic"
+    if LIVE:
+        delivery = st.radio(
+            "Delivery method",
+            ["Direct to Topic", "Via Log Router (Cloud Logging)"],
+            help="Direct to Topic = Publisher API straight to the topic (does NOT "
+                 "increment the Log Router sink volume). Via Log Router = write to "
+                 "Cloud Logging so the vertex-ai-telemetry-sink routes it to the "
+                 "topic (this DOES increment the sink volume; routing takes a few seconds).",
+        )
+
     cA, cB = st.columns(2)
     with cA:
         do_publish = st.button("▶ Publish", use_container_width=True)
@@ -434,7 +446,15 @@ with st.sidebar:
     if do_publish:
         prov = None if publish_provider == "Random" else publish_provider
         new = [generate_mock_event(prov) for _ in range(publish_count)]
-        if LIVE:
+        if LIVE and delivery.startswith("Via Log Router"):
+            ok, msg, n = pubsub_live.log_events([e["data"] for e in new])
+            st.session_state.status_banner = ("success" if ok else "error", msg)
+            if ok:
+                # Show locally; routed copies will also be pullable from the topic.
+                for e in new:
+                    e["data"]["_routed_via_log_router"] = True
+                st.session_state.published_events = new + st.session_state.published_events
+        elif LIVE:
             ok, msg, ids = pubsub_live.publish_events([e["data"] for e in new])
             st.session_state.status_banner = ("success" if ok else "error", msg)
             if ok:

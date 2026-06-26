@@ -64,6 +64,12 @@ def analyze_pubsub_data(project_id, topic_id, subscription_id):
         try:
             data_str = msg.message.data.decode("utf-8")
             log_data = json.loads(data_str)
+            # Events routed via the Log Router arrive wrapped as a LogEntry, with
+            # the canonical event under jsonPayload. Unwrap so analysis is uniform.
+            if isinstance(log_data, dict) and "jsonPayload" in log_data:
+                inner = log_data.get("jsonPayload") or {}
+                inner["_routed_via_log_router"] = True
+                log_data = inner
             log_data["_message_id"] = msg.message.message_id
             analyzed_logs.append(log_data)
         except Exception as e:
