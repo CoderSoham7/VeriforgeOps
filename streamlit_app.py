@@ -810,30 +810,32 @@ with tab_stream:
             chars_str = f"{ru.get('input_characters', 0):,} chars" if "input_characters" in ru else ""
             usage_str = " · ".join(filter(None, [tokens_str, audio_str, chars_str])) or "—"
             cached_str = f"💾 {ru.get('cached_tokens', 0):,} cached" if ru.get("cached_tokens") else ""
+            cached_html = f'<span style="color:#00ff9d;">{cached_str}</span>' if cached_str else ""
 
-            st.markdown(f"""
-            <div class="event-row {row_cls}">
-                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                    {_cloud_chip(cloud)}
-                    <span style="color:rgba(220,235,255,0.9); font-weight:500;">{d['service']}</span>
-                    <span style="color:rgba(150,170,210,0.5);">·</span>
-                    <span style="color:rgba(180,200,240,0.7);">{d['operation']}</span>
-                    <span style="color:rgba(150,170,210,0.5);">·</span>
-                    <span style="color:rgba(200,220,255,0.6); font-size:0.72rem;">{d.get('model_type','—')} / v{d.get('model_version','?')}</span>
-                    <span style="margin-left:auto; color:#00d4ff; font-weight:600;">{_fmt_cost(d['cost'])}</span>
-                </div>
-                <div style="display:flex; gap:16px; margin-top:6px; font-size:0.72rem; color:rgba(150,170,210,0.6);">
-                    <span>👤 {d['associate_id']}</span>
-                    <span>🏷 {d['cost_centre']}</span>
-                    <span>📁 {d['project_code']}</span>
-                    <span>🌍 {d['region']}</span>
-                    <span>⏱ {d.get('latency_ms','—')} ms</span>
-                    <span>📊 {usage_str}</span>
-                    {f'<span style="color:#00ff9d;">{cached_str}</span>' if cached_str else ''}
-                    <span style="margin-left:auto; color:rgba(120,140,180,0.4);">{ev['message_id']} · {d['timestamp']}</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            row_html = (
+                f'<div class="event-row {row_cls}">'
+                f'<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">'
+                f'{_cloud_chip(cloud)}'
+                f'<span style="color:rgba(220,235,255,0.9); font-weight:500;">{d["service"]}</span>'
+                f'<span style="color:rgba(150,170,210,0.5);">·</span>'
+                f'<span style="color:rgba(180,200,240,0.7);">{d["operation"]}</span>'
+                f'<span style="color:rgba(150,170,210,0.5);">·</span>'
+                f'<span style="color:rgba(200,220,255,0.6); font-size:0.72rem;">{d.get("model_type","—")} / v{d.get("model_version","?")}</span>'
+                f'<span style="margin-left:auto; color:#00d4ff; font-weight:600;">{_fmt_cost(d["cost"])}</span>'
+                f'</div>'
+                f'<div style="display:flex; gap:16px; margin-top:6px; font-size:0.72rem; color:rgba(150,170,210,0.6); flex-wrap:wrap;">'
+                f'<span>👤 {d["associate_id"]}</span>'
+                f'<span>🏷 {d["cost_centre"]}</span>'
+                f'<span>📁 {d["project_code"]}</span>'
+                f'<span>🌍 {d["region"]}</span>'
+                f'<span>⏱ {d.get("latency_ms","—")} ms</span>'
+                f'<span>📊 {usage_str}</span>'
+                f'{cached_html}'
+                f'<span style="margin-left:auto; color:rgba(120,140,180,0.4);">{ev["message_id"]} · {d["timestamp"]}</span>'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(row_html, unsafe_allow_html=True)
 
         if len(filtered) > 50:
             st.info(f"Showing first 50 of {len(filtered)} events. Use filters to narrow down.")
@@ -1002,11 +1004,12 @@ with tab_analytics:
                 yaxis="y2",
                 hovertemplate="<b>%{x}</b><br>Events: %{y}<extra></extra>",
             ))
+            _fig6_layout = {k: v for k, v in PLOTLY_LAYOUT.items() if k != "legend"}
             fig6.update_layout(
-                **PLOTLY_LAYOUT,
+                **_fig6_layout,
                 height=280,
-                yaxis=dict(title="Cost ($)", gridcolor="rgba(255,255,255,0.05)", titlefont=dict(color="#00d4ff")),
-                yaxis2=dict(title="Count", overlaying="y", side="right", titlefont=dict(color="#a855f7")),
+                yaxis=dict(title=dict(text="Cost ($)", font=dict(color="#00d4ff")), gridcolor="rgba(255,255,255,0.05)"),
+                yaxis2=dict(title=dict(text="Count", font=dict(color="#a855f7")), overlaying="y", side="right"),
                 legend=dict(bgcolor="rgba(0,0,0,0)", x=0.01, y=0.99),
             )
             st.plotly_chart(fig6, use_container_width=True, config={"displayModeBar": False})
