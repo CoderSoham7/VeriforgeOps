@@ -508,7 +508,34 @@ with st.sidebar:
 
 
 # ── Aggregate published events ────────────────────────────────────────────────
-events = st.session_state.published_events
+def _normalize_event(e):
+    """Guarantee `data` has every key the dashboard reads; drop non-usage
+    payloads (e.g. raw Cloud Audit LogEntries streamed in that carry no usage
+    fields). Minimal canonical events get sensible defaults for missing keys."""
+    d = e.get("data") if isinstance(e, dict) else None
+    if not isinstance(d, dict) or not ("cloud" in d and "service" in d and "operation" in d):
+        return None
+    ru = d.get("request_units")
+    if not isinstance(ru, dict):
+        ru = {}
+    try:
+        cost = float(d.get("cost", 0) or 0)
+    except (TypeError, ValueError):
+        cost = 0.0
+    nd = {**d,
+          "cloud": d.get("cloud", "—"), "service": d.get("service", "—"),
+          "region": d.get("region", "global"), "operation": d.get("operation", "—"),
+          "associate_id": d.get("associate_id", "unknown"),
+          "cost_centre": d.get("cost_centre", "—"),
+          "project_code": d.get("project_code", d.get("source_project", "—")),
+          "resource_id": d.get("resource_id", "—"),
+          "cost": cost, "request_units": ru}
+    return {**e, "data": nd}
+
+
+_raw_events = st.session_state.published_events
+events = [ne for ne in (_normalize_event(e) for e in _raw_events) if ne is not None]
+_skipped_non_usage = len(_raw_events) - len(events)
 USING_SAMPLE = len(events) == 0
 
 if events:
