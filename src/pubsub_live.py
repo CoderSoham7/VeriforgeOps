@@ -40,6 +40,15 @@ CROSS_PROJECT_PRODUCERS: Dict[str, Dict[str, Any]] = {
         "iam_version": 3,
         "status": "active",
     },
+    "cog01k2y024cd8wbctssq11xdjrs6": {
+        "name": "AI/ML Guild Project",
+        "sink_name": "veriforgeops-crossproject-sink",
+        "log_name": "veriforgeops-crossproject",
+        "writer_identity": "serviceAccount:service-851059891287@gcp-sa-logging.iam.gserviceaccount.com",
+        "role": "roles/pubsub.publisher",
+        "iam_version": 3,
+        "status": "active",
+    },
 }
 
 
