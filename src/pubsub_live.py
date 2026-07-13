@@ -26,6 +26,116 @@ SUBSCRIPTION_ID = os.environ.get("VERIFORGE_PUBSUB_SUB", "veriforgeops-streamlit
 # Cloud Logging log name used when routing events through the Log Router sink.
 LOG_NAME = os.environ.get("VERIFORGE_LOG_NAME", "veriforgeops-telemetry")
 
+# ── Cross-project producer registry ──────────────────────────────────────────
+# Each entry represents a GCP project whose Log Router sink feeds the central
+# topic.  The writer-identity service account must have roles/pubsub.publisher
+# on the central topic for the sink to actually deliver.
+CROSS_PROJECT_PRODUCERS: Dict[str, Dict[str, Any]] = {
+    "cb6773828a-ociolegalc-gc": {
+        "name": "OCIO Legal Cloud",
+        "sink_name": "veriforgeops-crossproject-sink",
+        "log_name": "veriforgeops-crossproject",
+        "writer_identity": "serviceAccount:service-851059891287@gcp-sa-logging.iam.gserviceaccount.com",
+        "role": "roles/pubsub.publisher",
+        "iam_version": 3,
+        "status": "active",
+    },
+}
+
+
+def list_producers() -> List[Dict[str, Any]]:
+    """Return a list of all known producer projects (including central/self)."""
+    producers = [
+        {
+            "project_id": PROJECT_ID,
+            "name": "Central (Self)",
+            "sink_name": "vertex-ai-telemetry-sink",
+            "role": "owner",
+            "status": "active",
+        }
+    ]
+    for pid, meta in CROSS_PROJECT_PRODUCERS.items():
+        producers.append({"project_id": pid, **meta})
+    return producers
+
+
+def check_producer_sink_status(producer_project_id: str) -> Tuple[bool, str]:
+    """Best-effort check whether a cross-project sink exists and is healthy.
+
+    Returns (ok, status_message).  If credentials lack access to the producer
+    project's logging API this returns (False, 'unknown — no access').
+    """
+    meta = CROSS_PROJECT_PRODUCERS.get(producer_project_id)
+    if meta is None:
+        return False, f"Project {producer_project_id} is not in the producer registry."
+    try:
+        from google.cloud import logging_v2
+
+        creds = _credentials()
+        client = logging_v2.Client(project=producer_project_id, credentials=creds) if creds else logging_v2.Client(project=producer_project_id)
+        sink = client.sink(meta["sink_name"])
+        sink.reload()
+        return True, f"Sink '{meta['sink_name']}' active → {sink.destination}"
+    except Exception as e:
+        return False, f"Could not verify sink: {e}"
+
+
+def write_cross_project_log_entry(
+    producer_project_id: str,
+    event_payloads: List[Dict[str, Any]],
+) -> Tuple[bool, str, int]:
+    """Write canonical event payloads to a specific producer project's dedicated
+    log name so the cross-project Log Router sink routes them to the central
+    topic.  Each payload is tagged with ``source_project`` automatically.
+
+    Returns (ok, message, count_written).
+    """
+    meta = CROSS_PROJECT_PRODUCERS.get(producer_project_id)
+    if meta is None:
+        return False, f"Project {producer_project_id} is not in the producer registry.", 0
+    if not event_payloads:
+        return False, "No events to route.", 0
+
+    log_name = meta.get("log_name", "veriforgeops-crossproject")
+
+    # Best-effort schema validation.
+    try:
+        from src.schemas import CanonicalUsageEvent
+
+        validated = []
+        for p in event_payloads:
+            try:
+                p_copy = {**p, "source_project": producer_project_id}
+                validated.append(CanonicalUsageEvent(**p_copy).model_dump())
+            except Exception:
+                pass
+        if not validated:
+            return False, "All events failed schema validation.", 0
+    except Exception:
+        validated = [{**p, "source_project": producer_project_id} for p in event_payloads]
+
+    try:
+        client = _logging_client(producer_project_id)
+        logger = client.logger(log_name)
+        for payload in validated:
+            resource = {
+                "type": "audited_resource",
+                "labels": {
+                    "service": "aiplatform.googleapis.com",
+                    "method": str(payload.get("operation", "predict")),
+                    "project_id": producer_project_id,
+                },
+            }
+            logger.log_struct(payload, resource=resource, severity="INFO")
+        return (
+            True,
+            f"Routed {len(validated)} event(s) via {producer_project_id} → "
+            f"Log Router sink '{meta['sink_name']}' → {TOPIC_ID}.",
+            len(validated),
+        )
+    except Exception as e:
+        return False, f"Cross-project log routing failed: {e}", 0
+
 
 # ── Credential helpers ────────────────────────────────────────────────────────
 def _credentials():
@@ -252,7 +362,16 @@ def pull_events(max_messages: int = 50) -> Tuple[bool, str, List[Dict[str, Any]]
         if isinstance(payload, dict) and "jsonPayload" in payload:
             inner = payload.get("jsonPayload") or {}
             inner["_routed_via_log_router"] = True
+            # Extract source_project from LogEntry resource labels if available.
+            resource_labels = (payload.get("resource") or {}).get("labels") or {}
+            src_proj = resource_labels.get("project_id")
+            if src_proj and "source_project" not in inner:
+                inner["source_project"] = src_proj
             payload = inner
+        # Also check message attributes for source_project (set by some publishers).
+        attrs = getattr(msg.message, "attributes", {}) or {}
+        if "source_project" in attrs and isinstance(payload, dict):
+            payload.setdefault("source_project", attrs["source_project"])
         records.append({"message_id": msg.message.message_id, "data": payload})
 
     try:

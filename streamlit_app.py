@@ -20,6 +20,17 @@ except Exception:
     pubsub_live = None
     _LIVE_AVAILABLE = False
 
+# Cross-project producer registry (works even without live GCP — shows config in UI)
+try:
+    from src.pubsub_live import CROSS_PROJECT_PRODUCERS, list_producers
+    _MULTI_PROJECT_AVAILABLE = True
+except Exception:
+    CROSS_PROJECT_PRODUCERS = {}
+    def list_producers():
+        return [{"project_id": "cog01k24f1ea555zdv7ynzthxanz5", "name": "Central (Self)",
+                 "role": "owner", "status": "active"}]
+    _MULTI_PROJECT_AVAILABLE = False
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="VeriForge Ops · Vertex AI Telemetry & FinOps",
@@ -236,6 +247,8 @@ if "live_mode" not in st.session_state:
     st.session_state.live_mode = False
 if "status_banner" not in st.session_state:
     st.session_state.status_banner = None  # (kind, text)
+if "selected_source_project" not in st.session_state:
+    st.session_state.selected_source_project = "central"  # "central" or a producer project ID
 
 
 # ── Provider metadata & generators ────────────────────────────────────────────
@@ -350,6 +363,9 @@ def generate_mock_event(provider: str = None) -> Dict[str, Any]:
     ru = _rand_request_units(operation)
     cost = _approx_cost(provider, operation, ru)
     st.session_state.msg_counter += 1
+    # Randomly assign a source project for multi-project simulation.
+    all_project_ids = ["cog01k24f1ea555zdv7ynzthxanz5"] + list(CROSS_PROJECT_PRODUCERS.keys())
+    source_proj = random.choice(all_project_ids)
     return {
         "message_id": f"mock-msg-{st.session_state.msg_counter:04d}",
         "data": {
@@ -368,6 +384,7 @@ def generate_mock_event(provider: str = None) -> Dict[str, Any]:
             "model_version": model_ver,
             "model_type": model_type,
             "latency_ms": random.randint(200, 8000),
+            "source_project": source_proj,
         },
     }
 
@@ -503,6 +520,9 @@ with st.sidebar:
         <div>{mode_badge}</div>
         <div style="margin-top:8px;">📦 Topic: <span class="mono" style="color:{C['brand500']};">veriforgeops-telemetry-ingest</span></div>
         <div style="margin-top:4px;">🗂 Project: <span class="mono" style="color:{C['brand500']};">cog01k24f1...</span></div>
+        <div style="margin-top:8px; font-size:0.6rem; text-transform:uppercase; letter-spacing:1px; color:{C['gray500']}; margin-bottom:4px;">Cross-Project Producers</div>
+        <div style="margin-top:4px;">🟢 <span class="mono" style="color:{C['green']}; font-size:0.65rem;">cb6773828a... (OCIO Legal)</span></div>
+        <div style="font-size:0.55rem; color:{C['gray500']}; margin-left:16px;">roles/pubsub.publisher · v3</div>
     </div>
     """)
 
@@ -522,6 +542,8 @@ def _normalize_event(e):
         cost = float(d.get("cost", 0) or 0)
     except (TypeError, ValueError):
         cost = 0.0
+    # Resolve source_project: explicit field, or fall back to central project ID.
+    source_proj = d.get("source_project", "cog01k24f1ea555zdv7ynzthxanz5")
     nd = {**d,
           "cloud": d.get("cloud", "—"), "service": d.get("service", "—"),
           "region": d.get("region", "global"), "operation": d.get("operation", "—"),
@@ -529,7 +551,8 @@ def _normalize_event(e):
           "cost_centre": d.get("cost_centre", "—"),
           "project_code": d.get("project_code", d.get("source_project", "—")),
           "resource_id": d.get("resource_id", "—"),
-          "cost": cost, "request_units": ru}
+          "cost": cost, "request_units": ru,
+          "source_project": source_proj}
     return {**e, "data": nd}
 
 
@@ -546,6 +569,7 @@ if events:
         "resource_id": e["data"]["resource_id"], "cost": e["data"]["cost"],
         "model_type": e["data"].get("model_type", "—"), "model_version": e["data"].get("model_version", "—"),
         "latency_ms": e["data"].get("latency_ms", 0),
+        "source_project": e["data"].get("source_project", "cog01k24f1ea555zdv7ynzthxanz5"),
         "input_tokens": e["data"]["request_units"].get("input_tokens", 0),
         "output_tokens": e["data"]["request_units"].get("output_tokens", 0),
         "total_tokens": e["data"]["request_units"].get("total_tokens", e["data"]["request_units"].get("input_tokens", 0)),
@@ -641,8 +665,8 @@ st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  TABS                                                                       ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
-tab_overview, tab_flow, tab_pricing, tab_stream, tab_code = st.tabs([
-    "📊 Executive Overview", "🔀 Telemetry Flow", "🧮 Pricing Matrix", "📡 Event Stream", "</> Code Updates"
+tab_overview, tab_flow, tab_multi, tab_pricing, tab_stream, tab_code = st.tabs([
+    "📊 Executive Overview", "🔀 Telemetry Flow", "🌐 Multi-Project Hub", "🧮 Pricing Matrix", "📡 Event Stream", "</> Code Updates"
 ])
 
 
@@ -886,6 +910,175 @@ with tab_flow:
 
 
 # ════════════════════════════════════════════════════════════════════
+# TAB — MULTI-PROJECT HUB
+# ════════════════════════════════════════════════════════════════════
+with tab_multi:
+    html(f"""<div class="glass-card" style="margin-bottom:8px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+            <div>
+                <div class="sec-title">Multi-Project Pub/Sub Integration Hub</div>
+                <div class="sec-sub">Centralized log-lake architecture — cross-project Log Router sinks fan telemetry into the unified ingestion topic.</div>
+            </div>
+            <span style="font-size:0.62rem; font-weight:700; padding:4px 12px; border-radius:20px; background:rgba(52,168,83,0.1); color:{C['green']}; border:1px solid rgba(52,168,83,0.3);">LIVE ARCHITECTURE</span>
+        </div>
+    </div>""")
+
+    # Architecture diagram
+    html(f"""<div class="glass-card" style="background:rgba(2,6,12,0.6);">
+        <div style="font-size:0.66rem; font-weight:700; color:{C['indigo400']}; text-transform:uppercase; letter-spacing:1px; margin-bottom:14px;">🏗 Cross-Project Log-Lake Architecture</div>
+        <div style="display:grid; grid-template-columns:1fr auto 1fr; gap:16px; align-items:center;">
+            <div>
+                <div style="font-size:0.6rem; font-weight:700; color:{C['gray500']}; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">Producer Projects</div>
+                <div style="padding:14px; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.25); border-radius:12px; margin-bottom:10px;">
+                    <div style="font-size:0.72rem; font-weight:700; color:#fff;">🏠 cog01k24f1ea555...</div>
+                    <div style="font-size:0.58rem; color:{C['gray400']}; margin-top:2px;">Central Project (Self) · Owner</div>
+                    <div style="font-size:0.55rem; color:{C['green']}; margin-top:4px;">● vertex-ai-telemetry-sink → Topic (local)</div>
+                </div>
+                <div style="padding:14px; background:rgba(52,168,83,0.08); border:1px solid rgba(52,168,83,0.25); border-radius:12px;">
+                    <div style="font-size:0.72rem; font-weight:700; color:#fff;">🏛 cb6773828a-ociolegalc-gc</div>
+                    <div style="font-size:0.58rem; color:{C['gray400']}; margin-top:2px;">OCIO Legal Cloud · Cross-Project Producer</div>
+                    <div style="font-size:0.55rem; color:{C['green']}; margin-top:4px;">● veriforgeops-crossproject-sink → Central Topic</div>
+                    <div style="font-size:0.5rem; color:{C['gray500']}; margin-top:2px;">SA: service-851059891287@gcp-sa-logging.iam.gserviceaccount.com</div>
+                </div>
+            </div>
+            <div style="text-align:center; padding:0 8px;">
+                <div style="font-size:1.4rem;">→</div>
+                <div style="font-size:0.55rem; color:{C['gray500']}; margin-top:4px;">Log Router</div>
+                <div style="font-size:0.55rem; color:{C['gray500']};">Sink</div>
+            </div>
+            <div>
+                <div style="font-size:0.6rem; font-weight:700; color:{C['gray500']}; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">Central Ingestion</div>
+                <div style="padding:18px; background:rgba(99,102,241,0.12); border:2px solid rgba(99,102,241,0.35); border-radius:12px; text-align:center;">
+                    <div style="font-size:1.3rem; margin-bottom:6px;">📦</div>
+                    <div style="font-size:0.8rem; font-weight:700; color:#fff;">veriforgeops-telemetry-ingest</div>
+                    <div style="font-size:0.58rem; color:{C['gray400']}; margin-top:4px;">Central Pub/Sub Topic</div>
+                    <div style="font-size:0.58rem; color:{C['brand500']}; margin-top:4px;">Project: cog01k24f1ea555zdv7ynzthxanz5</div>
+                    <div style="margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.06);">
+                        <div style="font-size:0.55rem; color:{C['gray500']};">Subscriptions</div>
+                        <div style="font-size:0.6rem; color:{C['indigo300']}; margin-top:3px;">veriforgeops-streamlit-live</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>""")
+
+    # Producer registry table
+    m1, m2 = st.columns([2, 1])
+    with m1:
+        html(f"""<div class="glass-card" style="padding:24px 24px 8px;">
+            <div class="sec-title">Onboarded Producer Projects</div>
+            <div class="sec-sub" style="margin-bottom:14px;">Cross-project sinks routing telemetry to the central ingestion topic.</div>
+            <table class="vf-table">
+                <thead><tr>
+                    <th>Project ID</th><th>Display Name</th><th>Sink Name</th>
+                    <th>IAM Role</th><th>Policy Ver</th><th>Status</th>
+                </tr></thead>
+                <tbody>
+                    <tr>
+                        <td style="color:#fff;"><span class="dot" style="background:{C['brand500']};"></span>cog01k24f1ea555...</td>
+                        <td>Central (Self)</td>
+                        <td class="mono">vertex-ai-telemetry-sink</td>
+                        <td style="color:{C['green']};">owner</td>
+                        <td>—</td>
+                        <td><span style="background:rgba(52,168,83,0.12); color:{C['green']}; font-size:0.6rem; font-weight:700; padding:2px 8px; border-radius:20px; border:1px solid rgba(52,168,83,0.4);">● Active</span></td>
+                    </tr>
+                    <tr>
+                        <td style="color:#fff;"><span class="dot" style="background:{C['green']};"></span>cb6773828a-ocio...</td>
+                        <td>OCIO Legal Cloud</td>
+                        <td class="mono">veriforgeops-crossproject-sink</td>
+                        <td style="color:{C['green']};">roles/pubsub.publisher</td>
+                        <td class="mono">v3</td>
+                        <td><span style="background:rgba(52,168,83,0.12); color:{C['green']}; font-size:0.6rem; font-weight:700; padding:2px 8px; border-radius:20px; border:1px solid rgba(52,168,83,0.4);">● Active</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>""")
+
+    with m2:
+        html(f"""<div class="glass-card">
+            <div class="sec-title">IAM Binding Status</div>
+            <div class="sec-sub" style="margin-bottom:14px;">Service account permissions on the central topic.</div>
+            <div style="padding:14px; background:rgba(52,168,83,0.05); border:1px solid rgba(52,168,83,0.2); border-radius:12px; margin-bottom:12px;">
+                <div style="font-size:0.6rem; font-weight:700; color:{C['green']}; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px;">✅ IAM Grant Confirmed</div>
+                <div style="font-size:0.66rem; color:{C['gray400']}; line-height:1.6;">
+                    <div><strong style="color:#fff;">Role:</strong> roles/pubsub.publisher</div>
+                    <div><strong style="color:#fff;">Member:</strong> <span class="mono" style="font-size:0.58rem;">serviceAccount:service-851059891287@gcp-sa-logging.iam.gserviceaccount.com</span></div>
+                    <div><strong style="color:#fff;">Policy Version:</strong> 3</div>
+                    <div><strong style="color:#fff;">Target:</strong> veriforgeops-telemetry-ingest</div>
+                </div>
+            </div>
+            <div style="padding:14px; background:rgba(17,24,39,0.6); border:1px solid {C['border']}; border-radius:12px;">
+                <div style="font-size:0.66rem; font-weight:700; color:#fff; margin-bottom:6px;">Sink Log Filter</div>
+                <div class="mono" style="font-size:0.58rem; color:{C['indigo300']}; background:rgba(2,6,12,0.6); padding:8px; border-radius:6px; word-break:break-all;">
+                    logName="projects/cb6773828a-ociolegalc-gc/logs/veriforgeops-crossproject"
+                </div>
+            </div>
+        </div>""")
+
+    # Cross-project event volume breakdown
+    if df is not None and "source_project" in df.columns:
+        proj_vol = df.groupby("source_project").agg(
+            events=("cost", "count"), spend=("cost", "sum")
+        ).reset_index().sort_values("spend", ascending=False)
+    else:
+        proj_vol = None
+
+    html(f"""<div class="glass-card">
+        <div class="sec-title" style="margin-bottom:14px;">🔀 Cross-Project Telemetry Volume</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px;">""")
+
+    # Show per-project KPIs
+    central_proj = "cog01k24f1ea555zdv7ynzthxanz5"
+    if proj_vol is not None and not proj_vol.empty:
+        for _, row in proj_vol.iterrows():
+            pid = row["source_project"]
+            pname = "Central Project" if pid == central_proj else CROSS_PROJECT_PRODUCERS.get(pid, {}).get("name", pid[:16])
+            pcol = C["brand500"] if pid == central_proj else C["green"]
+            html(f"""<div style="padding:16px; background:rgba(17,24,39,0.6); border:1px solid {pcol}33; border-radius:12px;">
+                <div style="font-size:0.72rem; font-weight:700; color:#fff;">{pname}</div>
+                <div class="mono" style="font-size:0.55rem; color:{C['gray500']}; margin-top:2px;">{pid[:20]}...</div>
+                <div style="display:flex; gap:20px; margin-top:10px;">
+                    <div><div style="font-size:1.1rem; font-weight:800; color:{pcol};">{int(row['events'])}</div><div style="font-size:0.55rem; color:{C['gray400']};">Events</div></div>
+                    <div><div style="font-size:1.1rem; font-weight:800; color:{pcol};">${row['spend']:.4f}</div><div style="font-size:0.55rem; color:{C['gray400']};">Spend</div></div>
+                </div>
+            </div>""")
+    else:
+        html(f"""<div style="padding:16px; background:rgba(17,24,39,0.6); border:1px solid {C['brand500']}33; border-radius:12px;">
+            <div style="font-size:0.72rem; font-weight:700; color:#fff;">Central Project</div>
+            <div class="mono" style="font-size:0.55rem; color:{C['gray500']}; margin-top:2px;">cog01k24f1ea555z...</div>
+            <div style="display:flex; gap:20px; margin-top:10px;">
+                <div><div style="font-size:1.1rem; font-weight:800; color:{C['brand500']};">{n_events}</div><div style="font-size:0.55rem; color:{C['gray400']};">Events</div></div>
+                <div><div style="font-size:1.1rem; font-weight:800; color:{C['brand500']};">${total_cost:.4f}</div><div style="font-size:0.55rem; color:{C['gray400']};">Spend</div></div>
+            </div>
+        </div>
+        <div style="padding:16px; background:rgba(17,24,39,0.6); border:1px solid {C['green']}33; border-radius:12px;">
+            <div style="font-size:0.72rem; font-weight:700; color:#fff;">OCIO Legal Cloud</div>
+            <div class="mono" style="font-size:0.55rem; color:{C['gray500']}; margin-top:2px;">cb6773828a-ociol...</div>
+            <div style="display:flex; gap:20px; margin-top:10px;">
+                <div><div style="font-size:1.1rem; font-weight:800; color:{C['green']};">—</div><div style="font-size:0.55rem; color:{C['gray400']};">Events</div></div>
+                <div><div style="font-size:1.1rem; font-weight:800; color:{C['green']};">—</div><div style="font-size:0.55rem; color:{C['gray400']};">Spend</div></div>
+            </div>
+        </div>""")
+
+    html("""</div></div>""")
+
+    # Onboarding instructions
+    html(f"""<div class="glass-card" style="background:rgba(2,6,12,0.6);">
+        <div style="font-size:0.8rem; font-weight:700; color:{C['indigo400']}; margin-bottom:10px;">📋 Onboarding a New Producer Project</div>
+        <div style="font-size:0.74rem; color:{C['gray400']}; line-height:1.7;">
+            <strong style="color:#fff;">Step 1:</strong> Run <span class="mono" style="color:{C['brand500']};">configure_cross_project_sink.py</span> with the producer project ID to create the Log Router sink.<br/>
+            <strong style="color:#fff;">Step 2:</strong> Grant the sink's writer-identity service account <span style="color:{C['green']};">roles/pubsub.publisher</span> on the central topic.<br/>
+            <strong style="color:#fff;">Step 3:</strong> Write a test log entry in the producer project and verify it appears in the central subscription.<br/>
+            <strong style="color:#fff;">Step 4:</strong> Add the producer to <span class="mono" style="color:{C['brand500']};">CROSS_PROJECT_PRODUCERS</span> in <span class="mono" style="color:{C['brand500']};">src/pubsub_live.py</span> so the UI tracks it.
+        </div>
+        <div class="mono" style="margin-top:12px; padding:12px; background:rgba(2,6,12,0.8); border:1px solid {C['border']}; border-radius:8px; font-size:0.65rem; color:{C['indigo300']}; white-space:pre-wrap;">python configure_cross_project_sink.py \\
+  --producer-project &lt;NEW_PROJECT_ID&gt; \\
+  --central-project cog01k24f1ea555zdv7ynzthxanz5 \\
+  --topic veriforgeops-telemetry-ingest</div>
+    </div>""")
+
+
+# ════════════════════════════════════════════════════════════════════
 # TAB — PRICING MATRIX
 # ════════════════════════════════════════════════════════════════════
 with tab_pricing:
@@ -956,21 +1149,29 @@ with tab_stream:
             <div style="font-size:0.8rem; color:{C['gray400']}; margin-top:6px;">Use the sidebar to <strong>Publish</strong> telemetry, <strong>Pull Live Events</strong> (live mode), or <strong>Load Sample JSONL</strong>.</div>
         </div>""")
     else:
-        fc1, fc2 = st.columns(2)
+        fc1, fc2, fc3 = st.columns(3)
         with fc1:
             fcloud = st.multiselect("Filter by cloud", list(PROVIDER_META.keys()), default=[])
         with fc2:
             fassoc = st.multiselect("Filter by associate", sorted({e["data"]["associate_id"] for e in events}), default=[])
+        with fc3:
+            all_src_projects = sorted({e["data"].get("source_project", "cog01k24f1ea555zdv7ynzthxanz5") for e in events})
+            fproj = st.multiselect("Filter by source project", all_src_projects, default=[])
 
         filtered = events
         if fcloud:
             filtered = [e for e in filtered if e["data"]["cloud"] in fcloud]
         if fassoc:
             filtered = [e for e in filtered if e["data"]["associate_id"] in fassoc]
+        if fproj:
+            filtered = [e for e in filtered if e["data"].get("source_project", "cog01k24f1ea555zdv7ynzthxanz5") in fproj]
 
         # Delivery-path breakdown: Log Router vs Direct-to-Topic.
         routed_n = sum(1 for e in events if e["data"].get("_routed_via_log_router"))
         direct_n = len(events) - routed_n
+        # Source-project breakdown.
+        central_count = sum(1 for e in events if e["data"].get("source_project", "cog01k24f1ea555zdv7ynzthxanz5") == "cog01k24f1ea555zdv7ynzthxanz5")
+        cross_count = len(events) - central_count
         html(f"""<div style="display:flex; gap:10px; flex-wrap:wrap; margin:6px 0 12px;">
             <span style="font-size:0.68rem; font-weight:700; padding:3px 11px; border-radius:20px;
                 background:rgba(52,168,83,0.12); color:{C['green']}; border:1px solid rgba(52,168,83,0.4);">
@@ -978,6 +1179,12 @@ with tab_stream:
             <span style="font-size:0.68rem; font-weight:700; padding:3px 11px; border-radius:20px;
                 background:rgba(99,102,241,0.12); color:{C['indigo300']}; border:1px solid rgba(99,102,241,0.4);">
                 ⚡ Direct to Topic: {direct_n}</span>
+            <span style="font-size:0.68rem; font-weight:700; padding:3px 11px; border-radius:20px;
+                background:rgba(99,102,241,0.08); color:{C['brand500']}; border:1px solid rgba(99,102,241,0.3);">
+                🏠 Central: {central_count}</span>
+            <span style="font-size:0.68rem; font-weight:700; padding:3px 11px; border-radius:20px;
+                background:rgba(52,168,83,0.08); color:{C['green']}; border:1px solid rgba(52,168,83,0.3);">
+                🌐 Cross-Project: {cross_count}</span>
             <span style="font-size:0.72rem; color:{C['gray500']}; margin-left:auto; align-self:center;">
                 Showing {min(len(filtered),60)} of {len(filtered)} matching ({len(events)} total)</span>
         </div>""")
@@ -1000,10 +1207,20 @@ with tab_stream:
                 path_badge = (f'<span style="background:rgba(99,102,241,0.14); color:{C["indigo300"]}; '
                               f'border:1px solid rgba(99,102,241,0.45); font-size:0.55rem; font-weight:700; '
                               f'padding:2px 7px; border-radius:20px;">⚡ DIRECT</span>')
+            # Source project badge.
+            src_proj = d.get('source_project', 'cog01k24f1ea555zdv7ynzthxanz5')
+            is_central = src_proj == 'cog01k24f1ea555zdv7ynzthxanz5'
+            src_proj_label = 'Central' if is_central else CROSS_PROJECT_PRODUCERS.get(src_proj, {}).get('name', src_proj[:16])
+            src_proj_color = C['brand500'] if is_central else C['green']
+            src_badge = (f'<span style="background:{src_proj_color}14; color:{src_proj_color}; '
+                         f'border:1px solid {src_proj_color}45; font-size:0.55rem; font-weight:700; '
+                         f'padding:2px 7px; border-radius:20px;">'
+                         f'{"🏠" if is_central else "🌐"} {src_proj_label}</span>')
             html(f"""<div class="glass-card" style="padding:12px 16px; margin-bottom:8px; border-left:3px solid {cc};">
                 <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                     <span style="background:{cc}22; color:{cc}; border:1px solid {cc}55; font-size:0.6rem; font-weight:700; padding:2px 9px; border-radius:20px; text-transform:uppercase;">{cloud}</span>
                     {path_badge}
+                    {src_badge}
                     <span style="color:#fff; font-weight:600; font-size:0.8rem;">{d['service']}</span>
                     <span style="color:{C['gray500']};">·</span>
                     <span style="color:{C['gray400']}; font-size:0.78rem;">{d['operation']}</span>

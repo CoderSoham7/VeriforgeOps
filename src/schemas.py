@@ -70,6 +70,10 @@ class CanonicalUsageEvent(BaseModel):
         default=None, 
         description="API execution latency in milliseconds"
     )
+    source_project: Optional[str] = Field(
+        default=None,
+        description="Source GCP project ID that originated this event (for cross-project routing)"
+    )
 
     @field_validator("timestamp")
     @classmethod
