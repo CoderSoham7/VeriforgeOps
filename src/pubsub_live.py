@@ -31,15 +31,6 @@ LOG_NAME = os.environ.get("VERIFORGE_LOG_NAME", "veriforgeops-telemetry")
 # topic.  The writer-identity service account must have roles/pubsub.publisher
 # on the central topic for the sink to actually deliver.
 CROSS_PROJECT_PRODUCERS: Dict[str, Dict[str, Any]] = {
-    "cb6773828a-ociolegalc-gc": {
-        "name": "OCIO Legal Cloud",
-        "sink_name": "veriforgeops-crossproject-sink",
-        "log_name": "veriforgeops-crossproject",
-        "writer_identity": "serviceAccount:service-851059891287@gcp-sa-logging.iam.gserviceaccount.com",
-        "role": "roles/pubsub.publisher",
-        "iam_version": 3,
-        "status": "active",
-    },
     "cog01k2y024cd8wbctssq11xdjrs6": {
         "name": "AI/ML Guild Project",
         "sink_name": "veriforgeops-crossproject-sink",
@@ -57,7 +48,7 @@ def list_producers() -> List[Dict[str, Any]]:
     producers = [
         {
             "project_id": PROJECT_ID,
-            "name": "Central (Self)",
+            "name": "Central (OCIO Legal)",
             "sink_name": "vertex-ai-telemetry-sink",
             "role": "owner",
             "status": "active",
