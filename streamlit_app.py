@@ -412,6 +412,10 @@ with st.sidebar:
     st.divider()
 
     # ── Mode toggle: Mock (session only) vs Live (real GCP Pub/Sub) ───────────
+    def _on_live_mode_toggle():
+        st.session_state.published_events = []
+        st.session_state.msg_counter = 0
+
     live_default = st.session_state.live_mode
     st.session_state.live_mode = st.toggle(
         "🛰 Live GCP Pub/Sub",
@@ -419,6 +423,7 @@ with st.sidebar:
         help="OFF = local mock (session only). ON = publish to / pull from the real "
              "Pub/Sub topic. Requires GCP credentials.",
         disabled=not _LIVE_AVAILABLE,
+        on_change=_on_live_mode_toggle,
     )
     LIVE = st.session_state.live_mode and _LIVE_AVAILABLE
 
