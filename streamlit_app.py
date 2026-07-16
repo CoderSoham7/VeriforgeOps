@@ -1227,6 +1227,11 @@ with tab_stream:
                          f'border:1px solid {src_proj_color}45; font-size:0.55rem; font-weight:700; '
                          f'padding:2px 7px; border-radius:20px;">'
                          f'{"🏠" if is_central else "🌐"} {src_proj_label}</span>')
+                         
+            # End-to-end traceability mapping (Pub/Sub message_id <-> Cloud Logging insertId)
+            insert_id = d.get('_cloud_logging_insert_id')
+            insert_id_html = f' · <span style="color:{C["orange"]};" title="Cloud Logging insertId">🪵 {insert_id}</span>' if insert_id else ''
+
             html(f"""<div class="glass-card" style="padding:12px 16px; margin-bottom:8px; border-left:3px solid {cc};">
                 <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                     <span style="background:{cc}22; color:{cc}; border:1px solid {cc}55; font-size:0.6rem; font-weight:700; padding:2px 9px; border-radius:20px; text-transform:uppercase;">{cloud}</span>
@@ -1243,7 +1248,7 @@ with tab_stream:
                     <span>👤 {d['associate_id']}</span><span>🏷 {d['cost_centre']}</span>
                     <span>📁 {d['project_code']}</span><span>🌍 {d['region']}</span>
                     <span>⏱ {d.get('latency_ms','—')} ms</span><span>📊 {usage}</span>{cached_html}
-                    <span class="mono" style="margin-left:auto; color:#374151;">{ev['message_id']} · {d['timestamp']}</span>
+                    <span class="mono" style="margin-left:auto; color:#374151;">{ev['message_id']}{insert_id_html} · {d['timestamp']}</span>
                 </div>
             </div>""")
 

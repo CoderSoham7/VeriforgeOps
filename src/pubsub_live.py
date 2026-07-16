@@ -362,6 +362,11 @@ def pull_events(max_messages: int = 1000) -> Tuple[bool, str, List[Dict[str, Any
         if isinstance(payload, dict) and "jsonPayload" in payload:
             inner = payload.get("jsonPayload") or {}
             inner["_routed_via_log_router"] = True
+            
+            # Extract insertId for end-to-end observability mapping
+            if "insertId" in payload:
+                inner["_cloud_logging_insert_id"] = payload["insertId"]
+                
             # Extract source_project from LogEntry resource labels if available.
             resource_labels = (payload.get("resource") or {}).get("labels") or {}
             src_proj = resource_labels.get("project_id")
