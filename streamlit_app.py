@@ -472,10 +472,7 @@ with st.sidebar:
             ok, msg, n = pubsub_live.log_events([e["data"] for e in new])
             st.session_state.status_banner = ("success" if ok else "error", msg)
             if ok:
-                # Show locally; routed copies will also be pullable from the topic.
-                for e in new:
-                    e["data"]["_routed_via_log_router"] = True
-                st.session_state.published_events = new + st.session_state.published_events
+                pass # Removed local echo. Events must now physically arrive via Pub/Sub pull to be seen on screen.
         elif LIVE:
             ok, msg, ids = pubsub_live.publish_events([e["data"] for e in new])
             st.session_state.status_banner = ("success" if ok else "error", msg)
