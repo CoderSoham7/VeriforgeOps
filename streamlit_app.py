@@ -564,7 +564,7 @@ def _normalize_event(e):
 _raw_events = st.session_state.published_events
 events = [ne for ne in (_normalize_event(e) for e in _raw_events) if ne is not None]
 _skipped_non_usage = len(_raw_events) - len(events)
-USING_SAMPLE = len(events) == 0
+USING_SAMPLE = len(events) == 0 and not st.session_state.live_mode
 
 if events:
     df = pd.DataFrame([{
@@ -596,11 +596,17 @@ if events:
     total_images = int(df["input_images"].sum())
     total_audio = df["input_audio_seconds"].sum()
     total_video = df["input_video_seconds"].sum()
-else:
+elif USING_SAMPLE:
     df = None
     total_cost, total_tokens, prompt_tokens, output_tokens = 10.0179, 5089213, 4843370, 245843
     cached_tokens, cache_savings, avg_latency, n_events = 585830, 0.3048, 3539.63, 150
     total_images, total_audio, total_video = 102, 4005.0, 377.0
+else:
+    # Live mode but zero events
+    df = None
+    total_cost, total_tokens, prompt_tokens, output_tokens = 0.0, 0, 0, 0
+    cached_tokens, cache_savings, avg_latency, n_events = 0, 0.0, 0, 0
+    total_images, total_audio, total_video = 0, 0.0, 0.0
 
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
