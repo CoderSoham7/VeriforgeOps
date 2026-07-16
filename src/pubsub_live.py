@@ -333,7 +333,7 @@ def _ensure_subscription(subscriber, project_id: str) -> str:
     return subscription_path
 
 
-def pull_events(max_messages: int = 50) -> Tuple[bool, str, List[Dict[str, Any]]]:
+def pull_events(max_messages: int = 1000) -> Tuple[bool, str, List[Dict[str, Any]]]:
     """
     Pull up to `max_messages` events from the persistent subscription, acknowledge
     them, and return them shaped like the UI's event records:

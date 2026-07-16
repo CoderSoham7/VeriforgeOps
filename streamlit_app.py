@@ -491,7 +491,7 @@ with st.sidebar:
     # Live pull control (only meaningful in live mode).
     if LIVE:
         if st.button("⬇ Pull Live Events", use_container_width=True):
-            ok, msg, recs = pubsub_live.pull_events(max_messages=50)
+            ok, msg, recs = pubsub_live.pull_events(max_messages=1000)
             st.session_state.status_banner = ("success" if ok else "error", msg)
             if ok and recs:
                 st.session_state.published_events = recs + st.session_state.published_events
