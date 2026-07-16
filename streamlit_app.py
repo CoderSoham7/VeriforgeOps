@@ -1227,7 +1227,7 @@ with tab_stream:
                          
             # End-to-end traceability mapping (Pub/Sub message_id <-> Cloud Logging insertId)
             insert_id = d.get('_cloud_logging_insert_id')
-            insert_id_html = f' · <span style="color:{C["orange"]};" title="Cloud Logging insertId">🪵 {insert_id}</span>' if insert_id else ''
+            insert_id_html = f' · <span style="color:#f97316;" title="Cloud Logging insertId">🪵 {insert_id}</span>' if insert_id else ''
 
             html(f"""<div class="glass-card" style="padding:12px 16px; margin-bottom:8px; border-left:3px solid {cc};">
                 <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
